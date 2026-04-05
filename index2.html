@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
+<title>FlipTrack — Gestionnaire de revente premium</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#f0ede8;min-height:100vh}
+input,select{width:100%;padding:9px 12px;border:0.5px solid rgba(0,0,0,0.2);border-radius:8px;font-size:14px;background:#fff;color:#111;font-family:inherit;outline:none;transition:border 0.15s,box-shadow 0.15s}
+input:focus,select:focus{border-color:#0F6E56;box-shadow:0 0 0 2px rgba(15,110,86,0.15)}
+button{font-family:inherit;cursor:pointer;transition:background 0.12s,opacity 0.12s}
+button:disabled{opacity:0.4;cursor:not-allowed}
+a{color:inherit;text-decoration:none}
+@keyframes fadeSlideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.animate-fade{animation:fadeSlideUp 0.2s ease-out}
+.ad-banner{background:#f0f0f0;border-top:1px solid #ddd;padding:10px;text-align:center;font-size:12px;color:#666;position:fixed;bottom:70px;left:0;right:0;max-width:520px;margin:0 auto;z-index:10}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useEffect, createContext, useContext } = React;
+
+// ==================== CONTEXTE UTILISATEUR ====================
+const AuthContext = createContext(null);
+
+// Hook personnalisé pour l'authentification
+function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error("useAuth must be used within AuthProvider");
+  return context;
+}
+
+// Provider d'authentification
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Charger l'utilisateur depuis localStorage
+    const savedUser = localStorage.getItem("fliptrack_user");
+    if (savedUser) {
+      try {
+        const parsed = JSON.parse(savedUser);
+        setUser(parsed);
+      } catch(e) {}
+    }
+    setLoading(false);
+  }, []);
+
+  const login = (email, password) => {
+    // Simulation : on vérifie si l'utilisateur existe
+    const users = JSON.parse(localStorage.getItem("fliptrack_users") || "[]");
+    const found = users.find(u => u.email === email && u.password === password);
+    if (found) {
+      setUser({ email: found.email, premium: found.premium, id: found.id });
+      localStorage.setItem("fliptrack_user", JSON.stringify({ email: found.email, premium: found.premium, id: found.id }));
+      return true;
+    }
+    return false;
+  };
+
+  const register = (email, password) => {
+    const users = JSON.parse(localStorage.getItem("fliptrack_users") || "[]");
+    if (users.find(u => u.email === email)) return false;
+    const newUser = { id: Date.now(), email, password, premium: false };
+    users.push(newUser);
+    localStorage.setItem("fliptrack_users", JSON.stringify(users));
+    setUser({ email: newUser.email, premium: false, id: newUser.id });
+    localStorage.setItem("fliptrack_user", JSON.stringify({ email: newUser.email, premium: false, id: newUser.id }));
+    return true;
+  };
+
+  const logout = () => {
+    setUser(null);
+    localStorage.removeItem("fliptrack_user");
+  };
+
+  const upgradeToPremium = () => {
+    if (user) {
+      const updatedUser = { ...user, premium: true };
+      setUser(updatedUser);
+      localStorage.setItem("fliptrack_user", JSON.stringify(updatedUser));
+      // Mettre à jour dans la liste des utilisateurs
+      const users = JSON.parse(localStorage.getItem("fliptrack_users") || "[]");
+      const index = users.findIndex(u => u.id === user.id);
+      if (index !== -1) {
+        users[index].premium = true;
+        localStorage.setItem("fliptrack_users", JSON.stringify(users));
+      }
+    }
+  };
+
+  const value = { user, loading, login, register, logout, upgradeToPremium };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+// ==================== CONFIGURATION DE L'APPLICATION ====================
+const CATEGORIES = ["Électronique","Vêtements","Sneakers","Jeux vidéo","Sacs","Livres / BD","Sport","Autre"];
+const PLATFORMS_LIST = ["LeBonCoin","Vinted","eBay","Back Market","Vestiaire Collective","StockX","Momox","Rakuten","Videdressing","Facebook Marketplace"];
+
+const FEES = {
+  "LeBonCoin":0, "Vinted":0, "eBay":8, "Back Market":9,
+  "Vestiaire Collective":12, "StockX":9, "Momox":0,
+  "Rakuten":7, "Videdressing":10, "Facebook Marketplace":0
+};
+
+// Base de données de prix réels (identique à avant)
+const REAL_PRICE_DB = [
+  { keywords: ["iphone 15", "iphone15"], min: 600, max: 850, category: "Électronique", note: "Modèle récent" },
+  { keywords: ["iphone 14", "iphone14"], min: 500, max: 700, category: "Électronique", note: "Encore très demandé" },
+  { keywords: ["iphone 13", "iphone13"], min: 400, max: 550, category: "Électronique", note: "Bon rapport" },
+  { keywords: ["iphone 12", "iphone12"], min: 300, max: 450, category: "Électronique", note: "Occasion" },
+  { keywords: ["samsung s24", "galaxy s24"], min: 550, max: 800, category: "Électronique", note: "Flagship" },
+  { keywords: ["samsung s23", "galaxy s23"], min: 450, max: 650, category: "Électronique", note: "Très bon" },
+  { keywords: ["pixel 8", "google pixel"], min: 400, max: 600, category: "Électronique", note: "Photophone" },
+  { keywords: ["macbook pro", "macbook"], min: 900, max: 1800, category: "Électronique", note: "Selon génération" },
+  { keywords: ["airpods", "airpods pro"], min: 80, max: 180, category: "Électronique", note: "Écouteurs" },
+  { keywords: ["nike air max", "air max"], min: 80, max: 150, category: "Sneakers", note: "Classique" },
+  { keywords: ["jordan", "air jordan"], min: 120, max: 300, category: "Sneakers", note: "Selon rareté" },
+  { keywords: ["dunk low", "nike dunk"], min: 100, max: 200, category: "Sneakers", note: "Tendance" },
+  { keywords: ["yeezy", "adidas yeezy"], min: 200, max: 400, category: "Sneakers", note: "Collectionneur" },
+  { keywords: ["ps5", "playstation 5"], min: 400, max: 550, category: "Jeux vidéo", note: "Next-gen" },
+  { keywords: ["switch", "nintendo switch"], min: 200, max: 300, category: "Jeux vidéo", note: "Hybride" },
+  { keywords: ["zelda", "pokémon", "mario"], min: 30, max: 60, category: "Jeux vidéo", note: "Jeux populaires" },
+  { keywords: ["sac louis vuitton", "louis vuitton"], min: 600, max: 1200, category: "Sacs", note: "Luxe" },
+  { keywords: ["sac gucci", "gucci"], min: 500, max: 900, category: "Sacs", note: "Premium" },
+  { keywords: ["veste north face", "north face"], min: 80, max: 180, category: "Vêtements", note: "Outdoor" },
+  { keywords: ["livre harry potter", "harry potter"], min: 10, max: 30, category: "Livres / BD", note: "Collection" },
+  { keywords: ["vélo electrique", "vélo électrique"], min: 300, max: 800, category: "Sport", note: "Occasion" }
+];
+
+const CATEGORY_FALLBACK = {
+  "Électronique": [120, 650], "Vêtements": [15, 90], "Sneakers": [50, 200],
+  "Jeux vidéo": [20, 130], "Sacs": [40, 350], "Livres / BD": [5, 35],
+  "Sport": [25, 180], "Autre": [10, 120]
+};
+
+// Composants partagés (Badge, Label, Btn, Field, EmptyState, eur)
+function eur(n) {
+  return new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0);
+}
+
+const C = {
+  bg:"#fff", bgSec:"#f5f4f0", bgAmber:"#FAEEDA", bgGreen:"#E1F5EE", bgBlue:"#E6F1FB", bgRed:"#FCEBEB",
+  textPri:"#111", textSec:"#666", textTer:"#999",
+  green:"#0F6E56", greenDark:"#085041", greenLight:"#3B6D11",
+  amber:"#633806", amberMid:"#854F0B", amberLight:"#BA7517",
+  blue:"#0C447C", red:"#A32D2D",
+  border:"rgba(0,0,0,0.1)", borderMed:"rgba(0,0,0,0.18)",
+};
+
+const inp = { width:"100%", padding:"9px 12px", border:"0.5px solid "+C.borderMed, borderRadius:8, fontSize:14, background:C.bg, color:C.textPri, fontFamily:"inherit", outline:"none" };
+const sel = { ...inp, fontSize:13 };
+
+function Badge({ children, variant }) {
+  const map = { vendu:{ background:C.bgGreen, color:C.greenDark }, stock:{ background:C.bgAmber, color:C.amber }, info:{ background:C.bgBlue, color:C.blue }, red:{ background:C.bgRed, color:C.red } };
+  const s = map[variant] || map.vendu;
+  return <span style={{ fontSize:11, fontWeight:500, padding:"3px 10px", borderRadius:20, display:"inline-block", lineHeight:1.6, ...s }}>{children}</span>;
+}
+
+function Label({ children, action }) {
+  return ( <div style={{ display:"flex", alignItems:"center", margin:"20px 0 10px" }}><span style={{ fontSize:11, fontWeight:500, color:C.textTer, letterSpacing:"0.06em", textTransform:"uppercase" }}>{children}</span>{action && <div style={{ marginLeft:"auto" }}>{action}</div>}</div> );
+}
+
+function Btn({ children, onClick, full, disabled, danger, small, style:x }) {
+  return ( <button onClick={onClick} disabled={disabled} style={{ width: full ? "100%" : undefined, padding: small ? "4px 10px" : full ? "10px" : "8px 14px", border: danger ? "0.5px solid "+C.red : "0.5px solid "+C.borderMed, borderRadius:8, background:"transparent", color: danger ? C.red : C.textPri, fontSize: small ? 12 : 13, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, fontFamily:"inherit", ...x }}>{children}</button> );
+}
+
+function Field({ label, children }) {
+  return ( <div style={{ marginBottom:8 }}><p style={{ fontSize:12, color:C.textSec, marginBottom:4 }}>{label}</p>{children}</div> );
+}
+
+function EmptyState({ title, desc, onAction, actionLabel }) {
+  return ( <div style={{ textAlign:"center", padding:"32px 20px", background:C.bgSec, borderRadius:12, border:"0.5px dashed "+C.borderMed }}><div style={{ width:44, height:44, borderRadius:"50%", background:C.bg, border:"0.5px solid "+C.border, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 12px" }}><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="3" stroke="#888" strokeWidth="1.3" fill="none"/><path d="M7 10h6M10 7v6" stroke="#888" strokeWidth="1.3" strokeLinecap="round"/></svg></div><p style={{ fontSize:14, fontWeight:500, color:C.textPri, marginBottom:6 }}>{title}</p><p style={{ fontSize:13, color:C.textSec, lineHeight:1.6, marginBottom:16 }}>{desc}</p>{onAction && <Btn onClick={onAction}>{actionLabel}</Btn>}</div> );
+}
+
+// ==================== ÉCRAN DE CONNEXION / INSCRIPTION ====================
+function LoginScreen() {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const { login, register } = useAuth();
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setError("");
+    if (!email || !password) return setError("Veuillez remplir tous les champs");
+    if (isLogin) {
+      const success = login(email, password);
+      if (!success) setError("Email ou mot de passe incorrect");
+    } else {
+      const success = register(email, password);
+      if (!success) setError("Cet email est déjà utilisé");
+    }
+  };
+
+  return (
+    <div style={{ maxWidth:400, margin:"0 auto", padding:20, background:C.bg, minHeight:"100vh", display:"flex", alignItems:"center" }}>
+      <div style={{ width:"100%" }}>
+        <div style={{ textAlign:"center", marginBottom:32 }}>
+          <div style={{ width:64, height:64, background:C.bgAmber, borderRadius:20, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
+            <svg width="32" height="32" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="11" rx="2.5" fill="#EF9F27"/><rect x="2" y="4" width="16" height="5" rx="2.5" fill="#633806"/><rect x="7" y="14" width="6" height="2" rx="1" fill="#EF9F27"/><rect x="5" y="15.5" width="10" height="1.5" rx=".75" fill="#BA7517"/></svg>
+          </div>
+          <h1 style={{ fontSize:28, fontWeight:600, marginBottom:8 }}>FlipTrack</h1>
+          <p style={{ color:C.textSec, fontSize:14 }}>{isLogin ? "Connectez-vous à votre compte" : "Créez un compte gratuitement"}</p>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <Field label="Email"><input style={inp} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="exemple@email.com" /></Field>
+          <Field label="Mot de passe"><input style={inp} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" /></Field>
+          {error && <p style={{ color:C.red, fontSize:12, marginBottom:12 }}>{error}</p>}
+          <Btn full onClick={handleSubmit} x={{ marginTop:8, backgroundColor:"#0F6E56", color:"#fff", border:"none" }}>{isLogin ? "Se connecter" : "S'inscrire"}</Btn>
+          <p style={{ textAlign:"center", marginTop:20, fontSize:13, color:C.textSec }}>
+            {isLogin ? "Pas encore de compte ? " : "Déjà un compte ? "}
+            <button type="button" onClick={() => { setIsLogin(!isLogin); setError(""); }} style={{ background:"none", border:"none", color:C.green, fontWeight:500, cursor:"pointer" }}>
+              {isLogin ? "Inscrivez-vous" : "Connectez-vous"}
+            </button>
+          </p>
+        </form>
+        <p style={{ fontSize:11, color:C.textTer, textAlign:"center", marginTop:32 }}>En vous inscrivant, vous acceptez nos conditions générales.</p>
+      </div>
+    </div>
+  );
+}
+
+// ==================== PAGE DE PAIEMENT ====================
+function PaymentScreen({ onClose, onSuccess }) {
+  const [cardNumber, setCardNumber] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [cvc, setCvc] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handlePayment = (e) => {
+    e.preventDefault();
+    setError("");
+    if (!cardNumber || !expiry || !cvc) return setError("Veuillez remplir tous les champs");
+    // Simulation de validation (n'importe quelle carte 4242... fonctionne)
+    if (!cardNumber.startsWith("4242")) {
+      setError("Pour la démo, utilisez 4242 4242 4242 4242");
+      return;
+    }
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      onSuccess(); // Active premium
+      onClose();
+    }, 1500);
+  };
+
+  return (
+    <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, backgroundColor:"rgba(0,0,0,0.5)", backdropFilter:"blur(4px)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div style={{ maxWidth:400, width:"100%", background:"#fff", borderRadius:24, padding:24, boxShadow:"0 20px 35px -10px rgba(0,0,0,0.2)" }}>
+        <h2 style={{ fontSize:20, fontWeight:600, marginBottom:8 }}>Passer à FlipTrack Premium</h2>
+        <p style={{ fontSize:13, color:C.textSec, marginBottom:20 }}>Profitez de l'application sans publicité et soutenez le développement.</p>
+        <div style={{ background:C.bgAmber, borderRadius:12, padding:12, marginBottom:20, textAlign:"center" }}>
+          <span style={{ fontSize:26, fontWeight:700, color:C.amber }}>2,99 €</span>
+          <span style={{ fontSize:13, color:C.amberMid }}> / mois</span>
+          <p style={{ fontSize:12, marginTop:6 }}>Annulable à tout moment</p>
+        </div>
+        <form onSubmit={handlePayment}>
+          <Field label="Numéro de carte"><input style={inp} placeholder="4242 4242 4242 4242" value={cardNumber} onChange={e => setCardNumber(e.target.value.replace(/\s/g,''))} /></Field>
+          <div style={{ display:"flex", gap:12 }}>
+            <Field label="Expiration (MM/AA)"><input style={inp} placeholder="12/28" value={expiry} onChange={e => setExpiry(e.target.value)} /></Field>
+            <Field label="CVC"><input style={inp} placeholder="123" value={cvc} onChange={e => setCvc(e.target.value)} /></Field>
+          </div>
+          {error && <p style={{ color:C.red, fontSize:12, marginBottom:12 }}>{error}</p>}
+          <Btn full onClick={handlePayment} disabled={loading} x={{ backgroundColor:"#0F6E56", color:"#fff", border:"none", marginTop:8 }}>{loading ? "Traitement..." : "Payer 2,99 €"}</Btn>
+          <Btn full onClick={onClose} x={{ marginTop:8 }}>Annuler</Btn>
+        </form>
+        <p style={{ fontSize:10, color:C.textTer, textAlign:"center", marginTop:16 }}>Paiement sécurisé par Stripe (simulation). Aucune vraie transaction.</p>
+      </div>
+    </div>
+  );
+}
+
+// ==================== APPLICATION PRINCIPALE (FlipTrack) ====================
+function FlipTrackApp() {
+  const { user, logout, upgradeToPremium } = useAuth();
+  const [showPayment, setShowPayment] = useState(false);
+  const [items, setItems] = useState(() => {
+    const saved = localStorage.getItem(`fliptrack_items_${user?.id}`);
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [tab, setTab] = useState("dashboard");
+  const [showAdd, setShowAdd] = useState(false);
+  const [sellTarget, setSellTarget] = useState(null);
+  const [sellPrice, setSellPrice] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [guideCat, setGuideCat] = useState("Électronique");
+  const [siteFilter, setSiteFilter] = useState("Tous");
+  const [form, setForm] = useState({ name:"", category:"Électronique", buyPrice:"", platform:"LeBonCoin" });
+  const [estForm, setEstForm] = useState({ name:"", category:"Électronique", buyPrice:"" });
+  const [estResult, setEstResult] = useState(null);
+  const [estLoading, setEstLoading] = useState(false);
+
+  useEffect(() => {
+    if (user) localStorage.setItem(`fliptrack_items_${user.id}`, JSON.stringify(items));
+  }, [items, user]);
+
+  const stats = useMemo(() => {
+    const sold = items.filter(i => i.status === "vendu");
+    const inStock = items.filter(i => i.status === "stock");
+    return {
+      profit: sold.reduce((a,i) => { const fee = FEES[i.platform]||0; const net = (i.sellPrice||0)*(1-fee/100); return a + (net - i.buyPrice); }, 0),
+      revenue: sold.reduce((a,i) => a + (i.sellPrice||0), 0),
+      invested: inStock.reduce((a,i) => a + i.buyPrice, 0),
+      totalSpent: items.reduce((a,i) => a + i.buyPrice, 0),
+      inStock: inStock.length,
+      soldCount: sold.length,
+    };
+  }, [items]);
+
+  function addItem() {
+    if (!form.name || !form.buyPrice) return;
+    const date = new Date().toLocaleDateString("fr-FR");
+    setItems(p => [...p, { id:Date.now(), name:form.name, category:form.category, buyPrice:parseFloat(form.buyPrice), sellPrice:null, platform:form.platform, status:"stock", date }]);
+    setForm({ name:"", category:"Électronique", buyPrice:"", platform:"LeBonCoin" });
+    setShowAdd(false);
+    setTab("stock");
+  }
+
+  function confirmSell() {
+    const price = parseFloat(sellPrice);
+    if (!price || !sellTarget) return;
+    setItems(p => p.map(i => i.id === sellTarget ? { ...i, status:"vendu", sellPrice:price } : i));
+    setSellTarget(null); setSellPrice("");
+  }
+
+  function deleteItem(id) {
+    setItems(p => p.filter(i => i.id !== id));
+    setDeleteConfirm(null);
+  }
+
+  function findRealPriceRange(productName, category) {
+    const lower = productName.toLowerCase();
+    for (let e of REAL_PRICE_DB) {
+      if (e.category === category && e.keywords.some(k => lower.includes(k))) return { min: e.min, max: e.max, note: e.note, found: true };
+    }
+    for (let e of REAL_PRICE_DB) {
+      if (e.keywords.some(k => lower.includes(k))) return { min: e.min, max: e.max, note: e.note, found: true };
+    }
+    return { found: false };
+  }
+
+  function runEstimator() {
+    if (!estForm.name.trim() || !estForm.buyPrice) return;
+    const buy = parseFloat(estForm.buyPrice);
+    if (isNaN(buy) || buy <= 0) return;
+    setEstLoading(true);
+    setEstResult(null);
+    setTimeout(() => {
+      const real = findRealPriceRange(estForm.name, estForm.category);
+      let low, high, source;
+      if (real.found) { low = real.min; high = real.max; source = `prix réel (${real.note})`; }
+      else { [low, high] = CATEGORY_FALLBACK[estForm.category]; source = `moyenne catégorie ${estForm.category}`; }
+      const feeRate = 8;
+      const netLow = low * (1-feeRate/100), netHigh = high * (1-feeRate/100);
+      const profitLow = netLow - buy, profitHigh = netHigh - buy;
+      let advice = "";
+      if (buy > high*1.5) advice = "🚨 Achat anormalement cher, perte probable";
+      else if (buy > high) advice = "⚠️ Prix d'achat supérieur au marché";
+      else if (buy < low*0.7) advice = "✅ Excellente affaire";
+      else advice = "👍 Prix cohérent";
+      let risk = (buy > high) ? "🔴 Risque élevé" : (buy > low) ? "🟠 Risque modéré" : "🟢 Bonne opportunité";
+      let recPlatform = "LeBonCoin";
+      if (estForm.category === "Vêtements") recPlatform = "Vinted";
+      else if (estForm.category === "Sneakers") recPlatform = "StockX";
+      else if (estForm.category === "Électronique") recPlatform = "Back Market";
+      else if (estForm.category === "Livres / BD") recPlatform = "Momox";
+      setEstResult({ low, high, profitLow, profitHigh, risk, recommendedPlatform: recPlatform, feeRate, advice, source });
+      setEstLoading(false);
+    }, 800);
+  }
+
+  const SITES = [
+    { name:"LeBonCoin", url:"https://www.leboncoin.fr", fee:0, color:"#F05C00", desc:"Généraliste français n°1. 0% de frais.", cats:["Électronique","Jeux vidéo","Sport","Livres / BD","Autre"], tip:"Publiez le matin." },
+    { name:"Vinted", url:"https://www.vinted.fr", fee:0, color:"#007782", desc:"Zéro frais, reine de la mode.", cats:["Vêtements","Sneakers","Sacs"], tip:"Photos sur fond blanc." },
+    { name:"eBay", url:"https://www.ebay.fr", fee:8, color:"#E53238", desc:"Audience mondiale.", cats:["Électronique","Jeux vidéo","Sneakers","Livres / BD"], tip:"Enchères à 1€." },
+    { name:"Back Market", url:"https://www.backmarket.fr", fee:9, color:"#1A1A1A", desc:"Reconditionné premium.", cats:["Électronique"], tip:"Soyez honnête." },
+    { name:"Vestiaire Collective", url:"https://www.vestiairecollective.com", fee:12, color:"#8B6914", desc:"Luxe d'occasion.", cats:["Vêtements","Sacs","Sneakers"], tip:"Authentification." },
+    { name:"StockX", url:"https://stockx.com", fee:9, color:"#00B100", desc:"Bourse des sneakers.", cats:["Sneakers","Vêtements"], tip:"Consultez les prix." },
+    { name:"Momox", url:"https://www.momox.fr", fee:0, color:"#FF6600", desc:"Rachat direct.", cats:["Livres / BD","Jeux vidéo"], tip:"Scannez les codes." },
+    { name:"Rakuten", url:"https://fr.shopping.rakuten.com", fee:7, color:"#E10098", desc:"Large gamme.", cats:["Électronique","Jeux vidéo","Livres / BD"], tip:"Proposez des lots." },
+    { name:"Videdressing", url:"https://www.videdressing.com", fee:10, color:"#C0392B", desc:"Mode premium française.", cats:["Vêtements","Sacs"], tip:"Photos pro." },
+    { name:"Facebook Marketplace", url:"https://www.facebook.com/marketplace", fee:0, color:"#1877F2", desc:"Gratuit, local.", cats:CATEGORIES, tip:"Rencontre en lieu sûr." }
+  ];
+
+  const GUIDE = {
+    "Électronique":[{n:"LeBonCoin",f:0,best:true,t:"Meilleure audience."},{n:"Back Market",f:9,best:false,t:"Reconditionné."},{n:"eBay",f:8,best:false,t:"Pièces rares."}],
+    "Vêtements":[{n:"Vinted",f:0,best:true,t:"Zéro frais."},{n:"LeBonCoin",f:0,best:false,t:"Lots."},{n:"Vestiaire Collective",f:12,best:false,t:"Luxe."}],
+    "Sneakers":[{n:"StockX",f:9,best:true,t:"Référence mondiale."},{n:"Vinted",f:0,best:false,t:"Sans frais."},{n:"eBay",f:8,best:false,t:"Vintage."}],
+    "Jeux vidéo":[{n:"LeBonCoin",f:0,best:true,t:"0% frais."},{n:"Vinted",f:0,best:false,t:"Jeux récents."},{n:"eBay",f:8,best:false,t:"Raretés."}],
+    "Sacs":[{n:"Vinted",f:0,best:true,t:"Marques courantes."},{n:"Vestiaire Collective",f:12,best:false,t:"Luxe."},{n:"LeBonCoin",f:0,best:false,t:"Local."}],
+    "Livres / BD":[{n:"LeBonCoin",f:0,best:true,t:"BD romans."},{n:"Momox",f:0,best:false,t:"Rachat direct."},{n:"eBay",f:8,best:false,t:"Éditions rares."}],
+    "Sport":[{n:"LeBonCoin",f:0,best:true,t:"Matériel sportif."},{n:"Vinted",f:0,best:false,t:"Vêtements sport."},{n:"eBay",f:8,best:false,t:"Niche."}],
+    "Autre":[{n:"LeBonCoin",f:0,best:true,t:"Généraliste."},{n:"Vinted",f:0,best:false,t:"Déco."},{n:"eBay",f:8,best:false,t:"International."}]
+  };
+
+  const tabs = [
+    { id:"dashboard", label:"Tableau", icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1.5" fill="currentColor"/><rect x="9" y="1" width="6" height="6" rx="1.5" fill="currentColor" opacity=".35"/><rect x="1" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity=".35"/><rect x="9" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity=".15"/></svg> },
+    { id:"stock", label:"Articles", icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.3" fill="none"/><path d="M5 8h6M5 5.5h6M5 10.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg> },
+    { id:"estimateur", label:"Estimer", icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.3" fill="none"/><path d="M8 5v3l2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg> },
+    { id:"plateformes", label:"Sites", icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.3" fill="none"/><path d="M8 2.5C6 2.5 4.5 5 4.5 8S6 13.5 8 13.5 11.5 11 11.5 8 10 2.5 8 2.5z" stroke="currentColor" strokeWidth="1.3"/><path d="M2.5 8h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg> },
+    { id:"guide", label:"Guide", icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M3 8h7M3 12h9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg> },
+  ];
+
+  const siteCats = ["Tous", ...CATEGORIES];
+  const filteredSites = siteFilter === "Tous" ? SITES : SITES.filter(s => s.cats.includes(siteFilter));
+
+  return (
+    <div style={{ maxWidth:520, margin:"0 auto", background:C.bg, minHeight:"100vh", position:"relative", paddingBottom:80 }}>
+      {/* Header avec bouton premium / déconnexion */}
+      <div style={{ padding:"18px 16px 14px", borderBottom:"0.5px solid "+C.border, display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ width:38, height:38, borderRadius:10, background:C.bgAmber, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="11" rx="2.5" fill="#EF9F27"/><rect x="2" y="4" width="16" height="5" rx="2.5" fill="#633806"/><rect x="7" y="14" width="6" height="2" rx="1" fill="#EF9F27"/><rect x="5" y="15.5" width="10" height="1.5" rx=".75" fill="#BA7517"/></svg>
+        </div>
+        <div><p style={{ fontWeight:500, fontSize:17 }}>FlipTrack</p><p style={{ fontSize:11, color:C.textTer }}>{user?.email}</p></div>
+        <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
+          {!user?.premium && <Btn small onClick={() => setShowPayment(true)} style={{ backgroundColor:"#0F6E56", color:"#fff", border:"none" }}>⭐ Premium</Btn>}
+          <Btn small onClick={logout}>Déconnexion</Btn>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <div style={{ display:"flex", gap:2, padding:"8px 10px", borderBottom:"0.5px solid "+C.border }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 2px", borderRadius:8, border:"none", background: tab===t.id ? C.bgSec : "transparent", color: tab===t.id ? C.textPri : C.textTer, fontSize:10, fontWeight: tab===t.id ? 500 : 400, cursor:"pointer" }}>
+            {t.icon}{t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Contenu principal (identique à avant) */}
+      <div style={{ padding:"0 16px 48px" }}>
+        {tab === "dashboard" && (
+          items.length === 0 ? (
+            <div style={{ paddingTop:20 }}>
+              <EmptyState title="Aucun article pour l'instant" desc="Ajoute ton premier achat." onAction={() => setTab("stock")} actionLabel="Ajouter mon premier article →" />
+              <div style={{ marginTop:20, background:C.bgSec, borderRadius:12, padding:"16px 18px" }}>
+                <p style={{ fontSize:13, fontWeight:500, marginBottom:14 }}>Comment ça fonctionne ?</p>
+                {[["1","Tu achètes un article","Ajoute-le dans Articles."],["2","Tu le revends","Entre le prix, gain net calculé."],["3","Tu suis tes gains","Tableau de bord complet."]].map(([n,title,desc]) => (
+                  <div key={n} style={{ display:"flex", gap:12, marginBottom:12 }}><div style={{ width:24, height:24, borderRadius:"50%", background:C.bgAmber, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:500, color:C.amber }}>{n}</div><div><p style={{ fontSize:13, fontWeight:500, marginBottom:2 }}>{title}</p><p style={{ fontSize:12, color:C.textSec }}>{desc}</p></div></div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <>
+              <Label>Tes gains nets</Label>
+              <div style={{ display:"grid", gap:10 }}>
+                <div style={{ background:C.bgAmber, borderRadius:12, padding:"16px 18px" }}>
+                  <p style={{ fontSize:12, fontWeight:500, color:C.amberMid }}>Profit net total</p>
+                  <p style={{ fontSize:28, fontWeight:500, color: stats.profit>=0 ? C.greenLight : C.red }}>{eur(stats.profit)}</p>
+                  <p style={{ fontSize:12, color:C.amberLight }}>{stats.soldCount} vente(s)</p>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <div style={{ background:C.bgSec, borderRadius:8, padding:"14px 16px" }}><p style={{ fontSize:12, color:C.textSec }}>CA</p><p style={{ fontSize:19, fontWeight:500 }}>{eur(stats.revenue)}</p></div>
+                  <div style={{ background:C.bgSec, borderRadius:8, padding:"14px 16px" }}><p style={{ fontSize:12, color:C.textSec }}>Dépensé</p><p style={{ fontSize:19, fontWeight:500 }}>{eur(stats.totalSpent)}</p></div>
+                </div>
+              </div>
+              <Label>Capital investi</Label>
+              <div style={{ background:C.bg, border:"0.5px solid "+C.border, borderRadius:12, padding:"14px 18px" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                  <div><p style={{ fontSize:13, fontWeight:500 }}>Argent bloqué en stock</p><p style={{ fontSize:12, color:C.textSec }}>{stats.inStock} article(s)</p></div>
+                  <div style={{ textAlign:"right" }}><p style={{ fontSize:22, fontWeight:500, color:C.amber }}>{eur(stats.invested)}</p><p style={{ fontSize:11, color:C.amberLight }}>à récupérer</p></div>
+                </div>
+                <Btn full onClick={() => setTab("stock")}>Voir le stock →</Btn>
+              </div>
+            </>
+          )
+        )}
+
+        {tab === "stock" && (
+          <>
+            <Label action={<Btn onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Annuler" : "+ Ajouter un achat"}</Btn>}>{items.length} article(s)</Label>
+            {showAdd && (
+              <div style={{ background:C.bgSec, borderRadius:12, padding:16, marginBottom:12 }}>
+                <p style={{ fontSize:14, fontWeight:500, marginBottom:4 }}>Nouvel article</p>
+                <Field label="Nom"><input style={inp} placeholder="Ex: iPhone 14" value={form.name} onChange={e => setForm({...form, name:e.target.value})} /></Field>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                  <Field label="Catégorie"><select style={sel} value={form.category} onChange={e => setForm({...form, category:e.target.value})}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+                  <Field label="Plateforme"><select style={sel} value={form.platform} onChange={e => setForm({...form, platform:e.target.value})}>{PLATFORMS_LIST.map(p => <option key={p}>{p}</option>)}</select></Field>
+                </div>
+                <Field label="Prix d'achat (€)"><input style={inp} type="number" placeholder="120" value={form.buyPrice} onChange={e => setForm({...form, buyPrice:e.target.value})} /></Field>
+                <Btn full onClick={addItem}>Enregistrer</Btn>
+              </div>
+            )}
+            {sellTarget && (
+              <div style={{ background:C.bg, border:"1.5px solid #0F6E56", borderRadius:12, padding:16, marginBottom:12 }}>
+                <p style={{ fontWeight:500 }}>Vendre "{items.find(i => i.id===sellTarget)?.name}"</p>
+                <p style={{ fontSize:13, color:C.textSec, marginBottom:12 }}>Acheté {eur(items.find(i => i.id===sellTarget)?.buyPrice)}</p>
+                <div style={{ display:"flex", gap:8 }}><input style={{ ...inp, flex:1 }} type="number" placeholder="Prix de vente" value={sellPrice} onChange={e => setSellPrice(e.target.value)} autoFocus /><Btn onClick={confirmSell}>Confirmer</Btn><Btn onClick={() => { setSellTarget(null); setSellPrice(""); }}>✕</Btn></div>
+              </div>
+            )}
+            {deleteConfirm && (
+              <div style={{ background:C.bgRed, border:"1.5px solid "+C.red, borderRadius:12, padding:16, marginBottom:12 }}>
+                <p style={{ fontWeight:500, color:C.red }}>Supprimer ?</p>
+                <p style={{ fontSize:13, marginBottom:12 }}>Action irréversible.</p>
+                <div style={{ display:"flex", gap:8 }}><Btn danger full onClick={() => deleteItem(deleteConfirm)}>Oui</Btn><Btn onClick={() => setDeleteConfirm(null)}>Non</Btn></div>
+              </div>
+            )}
+            {items.length === 0 && !showAdd && <EmptyState title="Aucun article" desc='Cliquez sur "+ Ajouter un achat"' onAction={() => setShowAdd(true)} actionLabel="+ Ajouter un achat" />}
+            {[...items].reverse().map(item => {
+              const fee = FEES[item.platform]||0;
+              const netSell = item.sellPrice ? item.sellPrice*(1-fee/100) : null;
+              const profit = netSell ? netSell - item.buyPrice : null;
+              return (
+                <div key={item.id} style={{ background:C.bg, border:"0.5px solid "+C.border, borderRadius:12, padding:"14px 16px", marginBottom:8 }}>
+                  <div style={{ display:"flex", alignItems:"flex-start", gap:12 }}>
+                    <div style={{ width:36, height:36, borderRadius:8, background:C.bgSec, display:"flex", alignItems:"center", justifyContent:"center" }}><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="#aaa"/><path d="M4.5 8h7M8 4.5v7" stroke="#aaa"/></svg></div>
+                    <div style={{ flex:1 }}><p style={{ fontWeight:500 }}>{item.name}</p><div style={{ fontSize:12, color:C.textSec }}>{item.category} · {item.platform} · {item.date}</div></div>
+                    <div><Badge variant={item.status}>{item.status==="vendu"?"vendu":"stock"}</Badge><button onClick={() => setDeleteConfirm(item.id)} style={{ marginLeft:8, width:28, height:28, borderRadius:6, border:"0.5px solid "+C.border, background:"transparent", cursor:"pointer" }}><svg width="13" height="13" viewBox="0 0 13 13"><path d="M2 3.5h9M5 3.5V2.5a.5.5 0 01.5-.5h2a.5.5 0 01.5.5v1M5.5 6v3.5M7.5 6v3.5M3 3.5l.5 7a.5.5 0 00.5.5h5a.5.5 0 00.5-.5l.5-7" stroke="#999"/></svg></button></div>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", marginTop:12, paddingTop:10, borderTop:"0.5px solid "+C.border, gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, color:C.textSec }}>Acheté <strong>{eur(item.buyPrice)}</strong>{item.sellPrice && <> → Vendu <strong>{eur(item.sellPrice)}</strong></>}</span>
+                    {profit != null && <span style={{ fontSize:14, fontWeight:500, color: profit>=0 ? C.green : C.red }}>Gain: {profit>=0?"+":""}{eur(profit)}</span>}
+                    {item.status === "stock" && <Btn small onClick={() => { setSellTarget(item.id); setSellPrice(""); }}>Vendre</Btn>}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {tab === "estimateur" && (
+          <>
+            <Label>Analyse IA — estimation fiable</Label>
+            <div style={{ background:C.bgSec, borderRadius:12, padding:16 }}>
+              <p style={{ fontSize:13, color:C.textSec, marginBottom:14 }}>Saisissez n'importe quel produit, une estimation sera toujours fournie.</p>
+              <Field label="Produit"><input style={inp} placeholder="Ex: iPhone 15, Nike Dunk..." value={estForm.name} onChange={e => setEstForm({...estForm, name:e.target.value})} /></Field>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <Field label="Catégorie"><select style={sel} value={estForm.category} onChange={e => setEstForm({...estForm, category:e.target.value})}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+                <Field label="Prix acheté (€)"><input style={inp} type="number" placeholder="800" value={estForm.buyPrice} onChange={e => setEstForm({...estForm, buyPrice:e.target.value})} /></Field>
+              </div>
+              <Btn full onClick={runEstimator} disabled={estLoading || !estForm.name || !estForm.buyPrice}>{estLoading ? "Analyse..." : "Estimer →"}</Btn>
+            </div>
+            {estResult && (
+              <div className="animate-fade" style={{ marginTop:16, background:C.bgGreen, borderRadius:12, padding:18 }}>
+                <p style={{ fontSize:12, fontWeight:500, color:C.green }}>Prix de revente constaté</p>
+                <p style={{ fontSize:26, fontWeight:500, color:C.greenDark }}>{eur(estResult.low)} – {eur(estResult.high)}</p>
+                <p style={{ fontSize:12, color:C.green }}>Source : {estResult.source}</p>
+                <div style={{ marginTop:12, display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <div style={{ background:"#fff", borderRadius:8, padding:12 }}><p style={{ fontSize:12, color:C.textSec }}>Bénéfice net</p><p style={{ fontSize:18, fontWeight:500 }}>{eur(estResult.profitLow)} à {eur(estResult.profitHigh)}</p></div>
+                  <div style={{ background:"#fff", borderRadius:8, padding:12 }}><p style={{ fontSize:12, color:C.amberMid }}>Risque</p><p style={{ fontSize:14, fontWeight:500 }}>{estResult.risk}</p></div>
+                </div>
+                <p style={{ fontSize:13, marginTop:12 }}>{estResult.advice}</p>
+                <p style={{ fontSize:12, fontWeight:500, marginTop:8, color:C.greenDark }}>Plateforme recommandée : {estResult.recommendedPlatform}</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {tab === "plateformes" && (
+          <>
+            <Label>Sites de revente</Label>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:16 }}>
+              {siteCats.map(cat => <button key={cat} onClick={() => setSiteFilter(cat)} style={{ fontSize:12, padding:"5px 12px", borderRadius:20, border: siteFilter===cat ? "1.5px solid #0F6E56" : "0.5px solid "+C.border, background: siteFilter===cat ? C.bgGreen : "transparent", color: siteFilter===cat ? C.greenDark : C.textSec, cursor:"pointer" }}>{cat}</button>)}
+            </div>
+            {filteredSites.map(site => (
+              <div key={site.name} style={{ background:C.bg, border:"0.5px solid "+C.border, borderRadius:12, overflow:"hidden", marginBottom:12 }}>
+                <div style={{ height:4, background:site.color }} />
+                <div style={{ padding:"14px 16px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+                    <div style={{ width:36, height:36, borderRadius:8, background:site.color, display:"flex", alignItems:"center", justifyContent:"center" }}><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="#fff"/><path d="M8 2.5C6.3 2.5 5 5 5 8s1.3 5.5 3 5.5S11 11 11 8s-1.3-5.5-3-5.5z" stroke="#fff"/><path d="M2.5 8h11" stroke="#fff"/></svg></div>
+                    <div style={{ flex:1 }}><p style={{ fontSize:15, fontWeight:500 }}>{site.name}</p><span style={{ fontSize:12, fontWeight:500, color: site.fee===0 ? C.green : C.amberMid }}>{site.fee===0 ? "Gratuit" : `${site.fee}% de frais`}</span></div>
+                    <a href={site.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:12, padding:"6px 14px", borderRadius:8, border:"0.5px solid "+C.borderMed, background:"transparent", color:C.textPri, textDecoration:"none" }}>Ouvrir →</a>
+                  </div>
+                  <p style={{ fontSize:13, color:C.textSec, marginBottom:10 }}>{site.desc}</p>
+                  <div style={{ background:C.bgAmber, borderRadius:8, padding:"8px 12px", display:"flex", gap:8 }}><span>💡</span><p style={{ fontSize:12, color:C.amberMid }}>{site.tip}</p></div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {tab === "guide" && (
+          <>
+            <Label>Où vendre selon la catégorie</Label>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:16 }}>
+              {CATEGORIES.map(cat => <button key={cat} onClick={() => setGuideCat(cat)} style={{ fontSize:12, padding:"5px 12px", borderRadius:20, border: guideCat===cat ? "1.5px solid #0F6E56" : "0.5px solid "+C.border, background: guideCat===cat ? C.bgGreen : "transparent", color: guideCat===cat ? C.greenDark : C.textSec, cursor:"pointer" }}>{cat}</button>)}
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:24 }}>
+              {(GUIDE[guideCat]||[]).map(p => (
+                <div key={p.n} style={{ background:C.bg, border: p.best ? "1.5px solid #1D9E75" : "0.5px solid "+C.border, borderRadius:12, padding:"14px 16px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>{p.best && <Badge variant="vendu">meilleur choix</Badge>}<span style={{ fontWeight:500 }}>{p.n}</span><span style={{ marginLeft:"auto", fontSize:13, fontWeight:500, color: p.f===0 ? C.green : C.amberMid }}>{p.f===0 ? "Gratuit" : `${p.f}% de frais`}</span></div>
+                  <p style={{ fontSize:13, color:C.textSec }}>{p.t}</p>
+                </div>
+              ))}
+            </div>
+            <Label>Frais par plateforme</Label>
+            <div style={{ background:C.bgSec, borderRadius:12, padding:"4px 16px" }}>
+              {Object.entries(FEES).map(([name,fee],i,arr) => (
+                <div key={name} style={{ display:"flex", justifyContent:"space-between", padding:"11px 0", borderBottom: i<arr.length-1 ? "0.5px solid "+C.border : "none" }}><span>{name}</span><span style={{ fontWeight:500, color: fee===0 ? C.green : C.textSec }}>{fee===0 ? "Gratuit" : `${fee}% prélevé`}</span></div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Bannière publicitaire (uniquement pour les utilisateurs gratuits) */}
+      {!user?.premium && (
+        <div className="ad-banner">
+          ⚡ Version gratuite avec publicités • <button onClick={() => setShowPayment(true)} style={{ background:"none", border:"none", color:C.green, fontWeight:500, textDecoration:"underline", cursor:"pointer" }}>Passer à Premium (2,99€/mois)</button> pour supprimer les pubs.
+        </div>
+      )}
+
+      {/* Modale de paiement */}
+      {showPayment && <PaymentScreen onClose={() => setShowPayment(false)} onSuccess={upgradeToPremium} />}
+    </div>
+  );
+}
+
+// ==================== ROUTEUR PRINCIPAL ====================
+function App() {
+  const { user, loading } = useAuth();
+  if (loading) return <div style={{ display:"flex", justifyContent:"center", alignItems:"center", height:"100vh" }}>Chargement...</div>;
+  return user ? <FlipTrackApp /> : <LoginScreen />;
+}
+
+// Rendu
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <AuthProvider>
+    <App />
+  </AuthProvider>
+);
+</script>
+</body>
+</html>
