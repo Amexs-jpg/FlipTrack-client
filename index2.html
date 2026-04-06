@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
-<title>FlipTrack — Gestionnaire de revente premium</title>
+<title>FlipTrack — Gestionnaire de revente</title>
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -28,37 +28,33 @@ const { useState, useMemo, useEffect, createContext, useContext } = React;
 // ==================== CONTEXTE UTILISATEUR ====================
 const AuthContext = createContext(null);
 
-// Hook personnalisé pour l'authentification
 function useAuth() {
   const context = useContext(AuthContext);
   if (!context) throw new Error("useAuth must be used within AuthProvider");
   return context;
 }
 
-// Provider d'authentification
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Charger l'utilisateur depuis localStorage
     const savedUser = localStorage.getItem("fliptrack_user");
     if (savedUser) {
       try {
-        const parsed = JSON.parse(savedUser);
-        setUser(parsed);
+        setUser(JSON.parse(savedUser));
       } catch(e) {}
     }
     setLoading(false);
   }, []);
 
   const login = (email, password) => {
-    // Simulation : on vérifie si l'utilisateur existe
     const users = JSON.parse(localStorage.getItem("fliptrack_users") || "[]");
     const found = users.find(u => u.email === email && u.password === password);
     if (found) {
-      setUser({ email: found.email, premium: found.premium, id: found.id });
-      localStorage.setItem("fliptrack_user", JSON.stringify({ email: found.email, premium: found.premium, id: found.id }));
+      const userData = { email: found.email, premium: found.premium, id: found.id };
+      setUser(userData);
+      localStorage.setItem("fliptrack_user", JSON.stringify(userData));
       return true;
     }
     return false;
@@ -70,8 +66,9 @@ function AuthProvider({ children }) {
     const newUser = { id: Date.now(), email, password, premium: false };
     users.push(newUser);
     localStorage.setItem("fliptrack_users", JSON.stringify(users));
-    setUser({ email: newUser.email, premium: false, id: newUser.id });
-    localStorage.setItem("fliptrack_user", JSON.stringify({ email: newUser.email, premium: false, id: newUser.id }));
+    const userData = { email: newUser.email, premium: false, id: newUser.id };
+    setUser(userData);
+    localStorage.setItem("fliptrack_user", JSON.stringify(userData));
     return true;
   };
 
@@ -82,10 +79,9 @@ function AuthProvider({ children }) {
 
   const upgradeToPremium = () => {
     if (user) {
-      const updatedUser = { ...user, premium: true };
-      setUser(updatedUser);
-      localStorage.setItem("fliptrack_user", JSON.stringify(updatedUser));
-      // Mettre à jour dans la liste des utilisateurs
+      const updated = { ...user, premium: true };
+      setUser(updated);
+      localStorage.setItem("fliptrack_user", JSON.stringify(updated));
       const users = JSON.parse(localStorage.getItem("fliptrack_users") || "[]");
       const index = users.findIndex(u => u.id === user.id);
       if (index !== -1) {
@@ -109,7 +105,6 @@ const FEES = {
   "Rakuten":7, "Videdressing":10, "Facebook Marketplace":0
 };
 
-// Base de données de prix réels (identique à avant)
 const REAL_PRICE_DB = [
   { keywords: ["iphone 15", "iphone15"], min: 600, max: 850, category: "Électronique", note: "Modèle récent" },
   { keywords: ["iphone 14", "iphone14"], min: 500, max: 700, category: "Électronique", note: "Encore très demandé" },
@@ -140,7 +135,7 @@ const CATEGORY_FALLBACK = {
   "Sport": [25, 180], "Autre": [10, 120]
 };
 
-// Composants partagés (Badge, Label, Btn, Field, EmptyState, eur)
+// ==================== COMPOSANTS PARTAGÉS ====================
 function eur(n) {
   return new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0);
 }
@@ -228,7 +223,7 @@ function LoginScreen() {
   );
 }
 
-// ==================== PAGE DE PAIEMENT ====================
+// ==================== PAGE DE PAIEMENT (sans émojis, sobre) ====================
 function PaymentScreen({ onClose, onSuccess }) {
   const [cardNumber, setCardNumber] = useState("");
   const [expiry, setExpiry] = useState("");
@@ -240,7 +235,6 @@ function PaymentScreen({ onClose, onSuccess }) {
     e.preventDefault();
     setError("");
     if (!cardNumber || !expiry || !cvc) return setError("Veuillez remplir tous les champs");
-    // Simulation de validation (n'importe quelle carte 4242... fonctionne)
     if (!cardNumber.startsWith("4242")) {
       setError("Pour la démo, utilisez 4242 4242 4242 4242");
       return;
@@ -248,9 +242,14 @@ function PaymentScreen({ onClose, onSuccess }) {
     setLoading(true);
     setTimeout(() => {
       setLoading(false);
-      onSuccess(); // Active premium
+      onSuccess();
       onClose();
     }, 1500);
+  };
+
+  const formatCard = (value) => {
+    const v = value.replace(/\s/g, '').slice(0, 16);
+    return v.replace(/(\d{4})(?=\d)/g, '$1 ');
   };
 
   return (
@@ -264,7 +263,7 @@ function PaymentScreen({ onClose, onSuccess }) {
           <p style={{ fontSize:12, marginTop:6 }}>Annulable à tout moment</p>
         </div>
         <form onSubmit={handlePayment}>
-          <Field label="Numéro de carte"><input style={inp} placeholder="4242 4242 4242 4242" value={cardNumber} onChange={e => setCardNumber(e.target.value.replace(/\s/g,''))} /></Field>
+          <Field label="Numéro de carte"><input style={inp} placeholder="4242 4242 4242 4242" value={formatCard(cardNumber)} onChange={e => setCardNumber(e.target.value.replace(/\s/g,''))} /></Field>
           <div style={{ display:"flex", gap:12 }}>
             <Field label="Expiration (MM/AA)"><input style={inp} placeholder="12/28" value={expiry} onChange={e => setExpiry(e.target.value)} /></Field>
             <Field label="CVC"><input style={inp} placeholder="123" value={cvc} onChange={e => setCvc(e.target.value)} /></Field>
@@ -279,7 +278,7 @@ function PaymentScreen({ onClose, onSuccess }) {
   );
 }
 
-// ==================== APPLICATION PRINCIPALE (FlipTrack) ====================
+// ==================== APPLICATION PRINCIPALE (nécessite connexion) ====================
 function FlipTrackApp() {
   const { user, logout, upgradeToPremium } = useAuth();
   const [showPayment, setShowPayment] = useState(false);
@@ -363,11 +362,11 @@ function FlipTrackApp() {
       const netLow = low * (1-feeRate/100), netHigh = high * (1-feeRate/100);
       const profitLow = netLow - buy, profitHigh = netHigh - buy;
       let advice = "";
-      if (buy > high*1.5) advice = "🚨 Achat anormalement cher, perte probable";
-      else if (buy > high) advice = "⚠️ Prix d'achat supérieur au marché";
-      else if (buy < low*0.7) advice = "✅ Excellente affaire";
-      else advice = "👍 Prix cohérent";
-      let risk = (buy > high) ? "🔴 Risque élevé" : (buy > low) ? "🟠 Risque modéré" : "🟢 Bonne opportunité";
+      if (buy > high*1.5) advice = "Achat anormalement cher, perte probable";
+      else if (buy > high) advice = "Prix d'achat supérieur au marché";
+      else if (buy < low*0.7) advice = "Excellente affaire";
+      else advice = "Prix cohérent";
+      let risk = (buy > high) ? "Risque élevé" : (buy > low) ? "Risque modéré" : "Bonne opportunité";
       let recPlatform = "LeBonCoin";
       if (estForm.category === "Vêtements") recPlatform = "Vinted";
       else if (estForm.category === "Sneakers") recPlatform = "StockX";
@@ -415,14 +414,14 @@ function FlipTrackApp() {
 
   return (
     <div style={{ maxWidth:520, margin:"0 auto", background:C.bg, minHeight:"100vh", position:"relative", paddingBottom:80 }}>
-      {/* Header avec bouton premium / déconnexion */}
+      {/* Header */}
       <div style={{ padding:"18px 16px 14px", borderBottom:"0.5px solid "+C.border, display:"flex", alignItems:"center", gap:10 }}>
         <div style={{ width:38, height:38, borderRadius:10, background:C.bgAmber, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="11" rx="2.5" fill="#EF9F27"/><rect x="2" y="4" width="16" height="5" rx="2.5" fill="#633806"/><rect x="7" y="14" width="6" height="2" rx="1" fill="#EF9F27"/><rect x="5" y="15.5" width="10" height="1.5" rx=".75" fill="#BA7517"/></svg>
         </div>
         <div><p style={{ fontWeight:500, fontSize:17 }}>FlipTrack</p><p style={{ fontSize:11, color:C.textTer }}>{user?.email}</p></div>
         <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
-          {!user?.premium && <Btn small onClick={() => setShowPayment(true)} style={{ backgroundColor:"#0F6E56", color:"#fff", border:"none" }}>⭐ Premium</Btn>}
+          {!user?.premium && <Btn small onClick={() => setShowPayment(true)} style={{ backgroundColor:"#0F6E56", color:"#fff", border:"none" }}>Premium</Btn>}
           <Btn small onClick={logout}>Déconnexion</Btn>
         </div>
       </div>
@@ -436,7 +435,7 @@ function FlipTrackApp() {
         ))}
       </div>
 
-      {/* Contenu principal (identique à avant) */}
+      {/* Contenu principal */}
       <div style={{ padding:"0 16px 48px" }}>
         {tab === "dashboard" && (
           items.length === 0 ? (
@@ -529,7 +528,7 @@ function FlipTrackApp() {
 
         {tab === "estimateur" && (
           <>
-            <Label>Analyse IA — estimation fiable</Label>
+            <Label>Analyse — estimation fiable</Label>
             <div style={{ background:C.bgSec, borderRadius:12, padding:16 }}>
               <p style={{ fontSize:13, color:C.textSec, marginBottom:14 }}>Saisissez n'importe quel produit, une estimation sera toujours fournie.</p>
               <Field label="Produit"><input style={inp} placeholder="Ex: iPhone 15, Nike Dunk..." value={estForm.name} onChange={e => setEstForm({...estForm, name:e.target.value})} /></Field>
@@ -605,7 +604,7 @@ function FlipTrackApp() {
       {/* Bannière publicitaire (uniquement pour les utilisateurs gratuits) */}
       {!user?.premium && (
         <div className="ad-banner">
-          ⚡ Version gratuite avec publicités • <button onClick={() => setShowPayment(true)} style={{ background:"none", border:"none", color:C.green, fontWeight:500, textDecoration:"underline", cursor:"pointer" }}>Passer à Premium (2,99€/mois)</button> pour supprimer les pubs.
+          Version gratuite avec publicités • <button onClick={() => setShowPayment(true)} style={{ background:"none", border:"none", color:C.green, fontWeight:500, textDecoration:"underline", cursor:"pointer" }}>Passer à Premium (2,99€/mois)</button> pour supprimer les pubs.
         </div>
       )}
 
